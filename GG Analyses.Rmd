@@ -1,0 +1,869 @@
+---
+title: 'The Urban Matrix, Arthropods, and Community Garden Yield: Code for Analyses'
+author: "Asia Kaiser"
+date: "April 2023"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+##### Loading packages
+*Install packages before loading*
+
+```{r, include=FALSE}
+library(vegan)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(lme4)
+library(lmerTest)
+library(nlme)
+library(lattice)
+library(iNEXT)
+library(spatstat) 
+library(scales)
+library(ggthemes)
+library(report)
+library(AER)
+library(ggiraphExtra)
+library(piecewiseSEM)
+library(mvabund)
+library(ggpubr)
+library(geosphere)
+library(multcompView)
+library(multcomp)
+```
+
+##### Reading in the dataframe
+
+```{r}
+rm(list=ls()) #clear global environment
+
+GGALL <-read.csv("GGALL.csv")
+head(GGALL)
+
+GGAugust <-read.csv("GGAugust.csv")
+
+GGsite <-read.csv("GGsite.csv")
+summary(GGsite)
+
+BeeNMDSinput <-read.csv("BeeNMDSinput.csv")
+BeeNMDSinput <- t(BeeNMDSinput)
+BeeNMDSinput <-BeeNMDSinput[-1,]
+
+GGspecieWide.ALL <-read.csv("GGspecieWide.ALL.csv")
+```
+
+## Data Exploration
+
+##### Descriptive statistics
+```{r}
+#Site imperviousness and wealth mean and sd
+mean(GGsite$imp200m)
+sd(GGsite$imp200m)
+mean(GGsite$wealth_index_2022)
+sd(GGsite$wealth_index_2022)
+```
+
+
+##### Preliminary data visualization
+```{r}
+#Histogram of Arthropod Abundances
+hist(GGsite$n.obs,
+     main = "Histogram of Arthropod Abundance",
+     xlab = "Abundance")
+
+hist(GGAugust$mass_g)
+shapiro.test(GGAugust$mass_g)
+shapiro.test(GGAugust$proportion_herbivory)
+
+#Herbivory data
+c1<- ggplot(GGAugust, aes(x = proportion_herbivory, y = reorder(plant_code, proportion_herbivory))) +
+  geom_point(size = 3) + 
+  theme(
+    axis.text.y=element_blank(),
+      axis.ticks.y=element_blank(),
+  axis.title.x = element_text(size = 20),
+  axis.title.y = element_text(size = 20))+
+  ylab("Plant code")+
+  xlab("% Herbivory")
+
+#Pepper Fruit data
+c2 <- ggplot(GGAugust, aes(x = mass_g, y = reorder(plant_code, mass_g))) +
+  geom_point(size = 3) + 
+  theme(
+    axis.text.y=element_blank(),
+      axis.ticks.y=element_blank(),
+  axis.title.x = element_text(size = 20),
+  axis.title.y = element_text(size = 20))+
+  ylab("Plant code")+
+  xlab("Mass (g)")
+
+#Pepper fruit with log transformation
+GGAugust$log_mass_g <-log(GGAugust$mass_g)
+c3 <-ggplot(GGAugust, aes(x = log_mass_g, y = reorder(plant_code, log_mass_g))) +
+  geom_point(size = 3) + 
+  theme(
+    axis.text.y=element_blank(),
+      axis.ticks.y=element_blank(),
+  axis.title.x = element_text(size = 20),
+  axis.title.y = element_text(size = 20))+
+  ylab("Plant code")+
+  xlab("Log mass (g)")
+
+#Herbivory data with log transformation
+GGAugust$log_herbivory <-log(GGAugust$proportion_herbivory)
+
+c4 <-ggplot(GGAugust, aes(x = log_herbivory, y = reorder(plant_code, log_herbivory))) +
+  geom_point(size = 3)+ 
+  theme(
+    axis.text.y=element_blank(),
+      axis.ticks.y=element_blank(),
+  axis.title.x = element_text(size = 20),
+  axis.title.y = element_text(size = 20))+
+  ylab("Plant code")+
+  xlab("Log % herbivory")
+
+supp1panelfig <-ggarrange(c1,c4,c2,c3)
+ggsave("supp1.png", supp1panelfig, width = 12, height = 8, units = "in")
+
+sum(GGsite$n.obs.herb)
+sum(GGsite$n.obs.pred)
+sum(GGsite$n.obs.pol)
+```
+
+### Tests of Normality for Data
+
+```{r}
+shapiro.test(GGAugust$log_mass_g) #normal
+shapiro.test(GGAugust$log_herbivory) #normal
+
+shapiro.test(GGALL$n.obs) #not normal
+shapiro.test(GGsite$n.obs.pol) # not normal
+shapiro.test(GGsite$bee.simpson) #not normal
+
+GGsite$log_bee.simpson <-log(GGsite$bee.simpson)
+GGAugust$log_bee.simpson <-log(GGAugust$bee.simpson.x)
+shapiro.test(GGsite$log_bee.simpson)
+hist(GGsite$log_bee.simpson)
+```
+
+
+## Analyses
+
+### Question 1: How do urbanization (impervious surface) and socioeconomic conditions surrounding garden site impact insect abundance?
+
+Look at autocorrelation between predictor variables
+
+```{r}
+cor.test(GGsite$imp200m,GGsite$scaled_wealth_index_2022)
+#Not a significant correlation
+```
+
+#Running Negative Binomial to Address Overdispersion
+
+```{r}
+insects.glm.2 <-glmer.nb(n.obs ~ imp200m+scaled_wealth_index_2022 + (1|month), data = GGsite)
+summary(insects.glm.2)
+
+backtransformed_q1 <- data.frame (predictor= c("imp1km", "wealthindex"),
+                  anti_log_coef = c(exp(-0.06255),exp(0.05613)),
+                  anti_log_lowCI = c(exp(-0.06255-0.02599),exp(0.05613-0.09941)),
+                  anti_log_highCI = c(exp(-0.06255+0.02599),exp(0.05613+0.09941)))
+
+plot(insects.glm.2)
+qqnorm(GGsite$n.obs, pch = 1, frame = FALSE)
+qqline(GGsite$n.obs, col = "steelblue")
+```
+
+### Question 1b: How does urbanzation effect pollinators, herbivores, and predator abundances?
+
+##### Running Mixed Effect Models
+
+```{r}
+#Bee abundances
+pol.obs.lme2 <-glmer.nb(n.obs.pol ~ imp200m+scaled_wealth_index_2022 +(1|month), data = GGsite)
+sum.pol <- summary(pol.obs.lme2)
+sum.pol
+
+backtransformed_q1_pol <- data.frame (predictor= c("imp1km", "wealthindex"),
+                  anti_log_coef = c(exp(sum.pol$coefficients[2,1]),exp(sum.pol$coefficients[3,1])),
+                  anti_log_lowCI = c(exp(sum.pol$coefficients[2,1]- sum.pol$coefficients[2,2]),
+                  exp(sum.pol$coefficients[3,1]-sum.pol$coefficients[3,2])),
+                  anti_log_highCI = c(exp(sum.pol$coefficients[2,1]+ sum.pol$coefficients[2,2]),
+                    exp(sum.pol$coefficients[3,1]+sum.pol$coefficients[3,2])))                  
+
+#Herbivore abundances
+herb.obs.lme <- glmer.nb(n.obs.herb ~ imp200m + scaled_wealth_index_2022 +(1|month),data = GGsite)
+sum.herb <- summary(herb.obs.lme)
+sum.herb
+
+backtransformed_q1_herb <- data.frame (predictor= c("imp1km", "wealthindex"),
+                  anti_log_coef = c(exp(sum.herb$coefficients[2,1]),exp(sum.herb$coefficients[3,1])),
+                  anti_log_lowCI = c(exp(sum.herb$coefficients[2,1]- sum.herb$coefficients[2,2]),
+                  exp(sum.herb$coefficients[3,1]-sum.herb$coefficients[3,2])),
+                  anti_log_highCI = c(exp(sum.herb$coefficients[2,1]+ sum.herb$coefficients[2,2]),
+                    exp(sum.herb$coefficients[3,1]+sum.herb$coefficients[3,2])))   
+
+#Predator abundances
+pred.obs.lme <- glmer.nb(n.obs.pred ~ imp200m + scaled_wealth_index_2022+(1|month),data = GGsite)
+sum.pred <- summary(pred.obs.lme)
+sum.pred
+
+
+backtransformed_q1_pred <- data.frame (predictor= c("imp1km", "wealthindex"),
+                  anti_log_coef = c(exp(sum.pred$coefficients[2,1]),exp(sum.pred$coefficients[3,1])),
+                  anti_log_lowCI = c(exp(sum.pred$coefficients[2,1]- sum.pred$coefficients[2,2]),
+                  exp(sum.pred$coefficients[3,1]-sum.pred$coefficients[3,2])),
+                  anti_log_highCI = c(exp(sum.pred$coefficients[2,1]+ sum.pred$coefficients[2,2]),
+                    exp(sum.pred$coefficients[3,1]+sum.pred$coefficients[3,2])))
+
+#Getting R square values
+
+require(lme4)
+require(MuMIn)
+r.squaredGLMM(pol.obs.lme2)
+r.squaredGLMM(herb.obs.lme)
+r.squaredGLMM(pred.obs.lme)
+```
+
+##### Checking Model assumptions
+
+```{r}
+plot(pol.obs.lme2)
+```
+
+### Question 2a: How do insect abundances at a garden site impact the herbivory damage on pepper plants?
+
+##### Running Mixed Effect Models
+
+```{r}
+#Filter for covered and uncovered peppers
+GGAugust.covered <- GGAugust%>% filter(GGAugust$treatment== "covered")
+GGAugust.uncovered <- GGAugust%>% filter(GGAugust$treatment== "uncovered")
+
+## Includes all arthropods categorized as herbivore or omnivore
+herbivory.lme.0 <-lmer(log_herbivory ~ n.obs.herb*treatment +(1|site), data = GGAugust)
+summary(herbivory.lme.0)
+
+herbivory.lme.1 <-lmer(log_herbivory ~ treatment +(1|site), data = GGAugust)
+summary(herbivory.lme.1)
+```
+
+##### Checking Model assumptions
+
+```{r}
+#Residual plots
+par(mfrow = c(1,2))
+plot(herbivory.lme.0,
+     main = "Fitted vs Residual Plot of Herbivory",
+     adj = .75,
+    cex.sub = 1)
+#Looks fine
+```
+### Question 2b: How predator abundances at a garden site impact the herbivory damage on pepper plants?
+
+##### Running Mixed Effect Models
+
+```{r}
+## Includes all arthropods categorized as predator in functional group category
+predation.lme.1 <-lmer(log_herbivory ~ n.obs.pred +(1|site), data = GGAugust.uncovered)
+summary(predation.lme.1)
+```
+
+##### Checking Model assumptions
+
+```{r}
+#Residual plots
+par(mfrow = c(1,2))
+plot(herbivory.lme.0,
+     main = "Fitted vs Residual Plot of Herbivory",
+     adj = .75,
+    cex.sub = 1)
+```
+
+### Question 3:How does bee abundance and diversity at a garden site impact pepper plant fruit sizes?
+
+*H3) As pollinator insect abundance and diversity increase, pepper plant fruit mass will increase as a result of increased pollination services.*
+
+##### Running Mixed Effect Model
+
+```{r}
+GGAugust.uncovered$scaled_n.obs.pol <- scale(GGAugust.uncovered$n.obs.pol, center = TRUE)
+
+#With just uncovered peppers and bee abundance and diversity
+pepper.lme.1 <-lmer(log_mass_g ~ n.obs.pol + bee.simpson.x + greenhouse + (1|site), data = GGAugust.uncovered)
+summary(pepper.lme.1) # bee diversity is significant
+
+pepper.lme.c <-lmer(log_mass_g ~ n.obs.pol + bee.simpson.x + greenhouse + (1|site), data = GGAugust.covered)
+summary(pepper.lme.c) #no effect of diversity or abundance for covered plants. 
+
+pepper.lme.4 <-lmer(pepper.obs ~ n.obs.pol + bee.simpson.x + greenhouse + (1|site), data = GGAugust.uncovered)
+summary(pepper.lme.4) #not signifcant effect of any covariate on pepper count
+```
+
+#### Checking Model Assumptions
+
+```{r}
+cor.test(GGAugust.uncovered$bee.simpson.x, GGAugust.uncovered$n.obs.pol)
+#Bee simpson diversity and abundance are not highly correlated
+
+plot(pepper.lme.1,
+     main = "Fitted vs Residual Plot of Pepper Mass",
+     adj = .75,
+    cex.sub = 1)
+#Looks okay
+```
+
+### Question 4: Is there a relationship between impervious surface and wealth index and bee species richness/biodiversity?
+
+```{r}
+#Bee Species Richness
+#It is run with log transformed response, instead of glm because the poisson distribution wont work because it is not count data (non-integer)
+beeRich.glm.1 <- lmer(log_bee.simpson ~ imp200m + scaled_wealth_index_2022 + (1|month),data = GGsite)
+summary(beeRich.glm.1)
+```
+
+### Question 5: Structural Equation Modeling
+
+*Is there an indirect effect of urbanization and wealth index on pepper plant yield?*
+
+```{r}
+#trying with Lm instead of Lmer
+beerich <- lm(bee.simpson.x ~ scaled_wealth_index_2022 + imp200m +n.obs.pred, data = GGAugust.uncovered)
+beeobs <- glm.nb(n.obs.pol~ scaled_wealth_index_2022 + imp200m +n.obs.pred, data = GGAugust.uncovered)
+herb.abund <- glm.nb(n.obs.herb ~ scaled_wealth_index_2022 + imp200m +n.obs.pred, data = GGAugust.uncovered)
+herbivory <-  lm(log_herbivory ~ n.obs.pol + bee.simpson.x + n.obs.herb +n.obs.pred+ greenhouse, data = GGAugust.uncovered)
+pred.abund <- glm.nb(n.obs.pred ~ scaled_wealth_index_2022 + imp200m, data = GGAugust.uncovered)
+pepperMass <- lm(log_mass_g ~ log_herbivory +n.obs.pol + bee.simpson.x + greenhouse, data = GGAugust.uncovered)
+
+#Running piecewise model
+SEMmodel <-psem(beerich,herbivory, beeobs, pepperMass,herb.abund,pred.abund, bee.simpson.x %~~% n.obs.herb, bee.simpson.x %~~% n.obs.pol, n.obs.herb %~~% n.obs.pol, n.obs.pred %~~% bee.simpson.x, data= GGAugust.uncovered)
+SEMmodel
+
+basisSet(SEMmodel)
+dSep(SEMmodel, .progressBar = FALSE)
+summary(SEMmodel)
+```
+
+### Question 6: Are there differences in bee community composition across sites?
+
+*H6) Each site will differ in bee community composition and these differences will be correlated with urbanization and wealth index.*
+
+```{r}
+#Creating NMDS
+set.seed(1000)
+Bees.nmds <- metaMDS(BeeNMDSinput, distance = "bray", k=2) #Creating Bee NMDS
+
+#Creating dataframe of environmental variables of interest
+GGsiteAugust <- GGsite%>% filter(GGsite$month== "August")
+env <-GGsiteAugust[,c(2,29,44)]
+
+#Running envfit function
+envfit.results <-envfit(Bees.nmds,env, permutations = 999, na.rm= TRUE)
+     #Wealth Index is significant!
+summary(envfit.results)
+
+genus_specie <-GGspecieWide.ALL$genus_specie
+#Figure out which species are driving site distribution pattern
+sppfit.results <- envfit(Bees.nmds, BeeNMDSinput, permutations = 999)
+sppfit.results
+
+Bees.nmds$species
+
+#Extracting scores from NMDS
+##Site scores
+data.scores <- as.data.frame(scores(Bees.nmds$points))
+data.scores$site <-GGsiteAugust$site
+data.scores$wealth <-GGsiteAugust$wealth_index_2022
+data.scores$imp <-GGsiteAugust$imp200m
+wealth.data.scores <- data.scores[,c(1,2,4)]
+
+##Species scores
+species.scores <-as.data.frame(scores(Bees.nmds$species))
+species.scores$species <-GGspecieWide.ALL$genus_specie
+species.scores$pvals <-sppfit.results$vectors$pvals
+sig.species.scores <-subset(species.scores, pvals <=0.05)
+sig.species.scores$species.clean <-c("L. dialictus spp.","B. nevadensis","M. coreopsis")
+
+```
+
+Model Checks
+
+```{r}
+stressplot(Bees.nmds) #Shepard Stressplot. Not too much scatter away from line= good
+```
+
+
+# Data Visualization
+
+## Main Text Figures
+
+#### Question 1
+
+```{r}
+#Arthropod abundance by impervious surface 500 m
+q1a <-ggplot(data = GGsite, aes(x= imp500m, y=n.obs))+
+  geom_point(size = 3)+
+  geom_smooth(method = lm, se= FALSE, color = "#bf2800")+
+  labs( x = "% impervious surface",
+        y = "Arthropod abundance")+
+  theme_classic()+
+  theme(axis.text.x = element_text(size = 19, hjust =.75),
+  axis.text.y = element_text(size = 19),
+  axis.title.x = element_text(size = 20),
+  axis.title.y = element_text(size = 20))
+q1a
+```
+
+```{r}
+#Arthropod abundance by functional groups over 200 m
+q1.bee <-ggplot(data = GGsite, aes(x= imp200m, y=n.obs.pol))+
+  geom_point(size = 3)+
+  geom_smooth(method = lm, se= FALSE, color = "black")+
+  labs( x = "",
+        y = "Pollinator abundance")+
+  theme_classic()+
+  theme(axis.text.x = element_text(size = 19, hjust =.75),
+  axis.text.y = element_text(size = 19),
+  axis.title.x = element_text(size = 20),
+  axis.title.y = element_text(size = 25))
+q1.bee
+
+q1.herb <-ggplot(data = GGsite, aes(x= imp200m, y=n.obs.herb))+
+  geom_point(size = 3)+
+  geom_smooth(method = lm, se= FALSE, color = "black")+
+  labs( x = "",
+        y = "Herbivore abundance")+
+  theme_classic()+
+  theme(axis.text.x = element_text(size = 19, hjust =.75),
+  axis.text.y = element_text(size = 19),
+  axis.title.x = element_text(size = 20),
+  axis.title.y = element_text(size = 25))
+q1.herb
+
+q1.pred <-ggplot(data = GGsite, aes(x= imp200m, y=n.obs.pred))+
+  geom_point(size = 3)+
+  geom_smooth(method = lm, se= FALSE, color = "black")+
+  labs( x = "% impervious surface",
+        y = "Predator abundance")+
+  theme_classic()+
+  theme(axis.text.x = element_text(size = 19, hjust =.75),
+  axis.text.y = element_text(size = 19),
+  axis.title.x = element_text(size = 25),
+  axis.title.y = element_text(size = 25))
+q1.pred
+```
+
+
+```{r}
+#Arthropod abundance by functional groups and wealth index
+q1.w.bee <-ggplot(data = GGsite, aes(x= wealth_index_2022, y=n.obs.pol))+
+  geom_point(size = 3)+
+  labs( x = "",
+        y = "")+
+  theme_classic()+
+  theme(axis.text.x = element_text(size = 19, hjust =.75),
+  axis.text.y = element_text(size = 19),
+  axis.title.x = element_text(size = 20),
+  axis.title.y = element_text(size = 20))
+q1.w.bee
+
+q1.w.herb <-ggplot(data = GGsite, aes(x= wealth_index_2022, y=n.obs.herb))+
+  geom_point(size = 3)+
+  labs( x = "",
+        y = "")+
+  theme_classic()+
+  theme(axis.text.x = element_text(size = 19, hjust =.75),
+  axis.text.y = element_text(size = 19),
+  axis.title.x = element_text(size = 20),
+  axis.title.y = element_text(size = 20))
+q1.w.herb
+
+q1.w.pred <-ggplot(data = GGsite, aes(x= wealth_index_2022, y=n.obs.pred))+
+  geom_point(size = 3)+
+  geom_smooth(method = lm, se= FALSE, color = "black")+
+  labs( x = "2022 wealth index",
+        y = "")+
+  theme_classic()+
+  theme(axis.text.x = element_text(size = 19, hjust =.75),
+  axis.text.y = element_text(size = 19),
+  axis.title.x = element_text(size = 25),
+  axis.title.y = element_text(size = 20))
+q1.w.pred
+```
+
+
+#### Question 3
+
+```{r}
+#Pepper Fruit Size Plot and Bee Abundance
+
+#With smooth geom
+q3a <-ggplot(GGAugust.uncovered, aes(x=bee.simpson.x, y=log_mass_g))+
+  geom_point(size = 3)+
+  geom_smooth(method = lm, se= FALSE, color = "black")+
+  theme_classic()+
+     labs(y = "Ln pepper mass (grams)", x = "Bee Hill-Simpson diversity")+
+  scale_colour_few()+
+  theme(axis.text.x = element_text(size = 19, hjust =.75),
+  axis.text.y = element_text(size = 19),
+  axis.title.x = element_text(size = 20),
+  axis.title.y = element_text(size = 20))
+
+q3a
+```
+
+
+#### Question 4
+```{r}
+#Bee Hill-Simpson by impervious surface 500m
+q1c <-ggplot(data = GGsite, aes(x= imp500m, y=log_bee.simpson))+
+  geom_point(size = 3)+
+  labs(x = "% impervious surface",
+        y = "Ln bee Hill-Simpson diversity")+
+  theme_classic()+
+  scale_colour_few()+
+  theme(axis.text.x = element_text(size = 19, hjust =.75),
+  axis.text.y = element_text(size = 19),
+  axis.title.x = element_text(size = 20),
+  axis.title.y = element_text(size = 20))
+q1c
+```
+
+
+```{r}
+#Bee-Simpson diversity by wealth 1 km
+q1d <-ggplot(data = GGsite, aes(x= wealth_index_2022, y=log_bee.simpson))+
+  geom_point(size = 3)+
+  geom_smooth(method = lm, se= FALSE, color = "#bf2800")+
+    labs(x = "2022 wealth index",
+        y = "Ln bee Hill-Simpson diversity")+
+  theme_classic()+
+  scale_colour_few()+
+  theme(axis.text.x = element_text(size = 19, hjust =.75),
+  axis.text.y = element_text(size = 19),
+  axis.title.x = element_text(size = 20),
+  axis.title.y = element_text(size = 20))
+q1d
+```
+
+#### Combining plots into one figure for question 1
+```{r}
+library(gridExtra)
+library(cowplot)
+q1panelfig <-ggarrange(ggarrange(q1.bee,q1.w.bee, ncol = 2, labels = c("","")),
+                       ggarrange( q1.herb,q1.w.herb, ncol = 2, labels = c("","")),
+                       ggarrange( q1.pred,q1.w.pred, ncol = 2, labels = c("","")), nrow = 3)
+ggsave("q1.png", q1panelfig, width = 10, height = 12, units = "in")
+```
+
+#### Question 6
+
+```{r}
+NMDS.graph <-ggplot(data=data.scores) + 
+  ggrepel::geom_text_repel(data = sig.species.scores, aes(x=MDS1, y=MDS2, label = species.clean), colour= "#6b6d6e", size= 5, cex = 3, direction = "both", segment.size = 0.25)+
+   geom_point(aes(x=MDS1,y=MDS2, colour=wealth),size=4) +
+  labs(x="NMDS1", y = "NMDS2")+
+  theme_classic()+
+  theme(axis.text.x = element_text(size = 16, hjust =.75),
+  axis.text.y = element_text(size = 16),
+  axis.title.x = element_text(size = 20),
+  axis.title.y = element_text(size = 20),
+  legend.title = element_text(size=18),
+  legend.text = element_text(size=16),
+  legend.position = "right",
+  legend.background = element_rect(fill = "grey"))
+NMDS.graph
+
+NMDS.graph.imp <-ggplot(data=data.scores) + 
+  ggrepel::geom_text_repel(data = sig.species.scores, aes(x=MDS1, y=MDS2, label = species.clean), colour= "#6b6d6e", size= 5, cex = 3, direction = "both", segment.size = 0.25)+
+   geom_point(aes(x=MDS1,y=MDS2, colour=imp),size=4) +
+  labs(x="NMDS1", y = "NMDS2")+
+  theme_classic()+
+  theme(axis.text.x = element_text(size = 16, hjust =.75),
+  axis.text.y = element_text(size = 16),
+  axis.title.x = element_text(size = 20),
+  axis.title.y = element_text(size = 20),
+  legend.title = element_text(size=18),
+  legend.text = element_text(size=16),
+  legend.position = "right",
+  legend.background = element_rect(fill = "grey"))
+NMDS.graph.imp
+```
+
+### Supplemental Figures
+
+Correlation between wealth index and impervious surface
+```{r}
+S1 <-ggplot(data = GGsite, aes(x= wealth_index_2022, y=imp200m))+
+  geom_point(size = 3)+
+    labs(x = "2022 Wealth Index (1 km)",
+        y = "% impervious surface (200m)")+
+  theme_classic()+
+  scale_colour_few()+
+  theme(axis.text.x = element_text(size = 19,hjust =.75),
+  axis.text.y = element_text(size = 19),
+  axis.title.x = element_text(size = 20),
+  axis.title.y = element_text(size = 20),
+ )
+S1
+```
+
+Total arthropod abundance with month included
+```{r}
+#Arthropod abundance by impervious surface 500 m
+S2a <-ggplot(data = GGsite, aes(x= imp200m, y=n.obs, color = month, shape = month))+
+  geom_point(size = 3)+
+  geom_smooth(method = lm, se= FALSE)+
+  labs( x = "% impervious surface",
+        y = "Total arthropod abundance",
+        color  = "Month", 
+        shape = "Month")+
+  scale_shape_manual(values = c(1,10,16))+
+  theme_classic()+
+  theme(axis.text.x = element_text(size = 19, hjust =.75),
+  axis.text.y = element_text(size = 19),
+  axis.title.x = element_text(size = 20),
+  axis.title.y = element_text(size = 20))+
+    scale_colour_viridis_d("Month") 
+S2a
+
+S2b <-ggplot(data = GGsite, aes(x= wealth_index_2022, y=n.obs, color = month, shape = month))+
+  geom_point(size = 3)+
+  geom_smooth(method = lm, se= FALSE)+
+  labs( x = "2022 Wealth Index",
+        y = "Total arthropod abundance",
+        color  = "Month", 
+        shape = "Month")+
+  scale_shape_manual(values = c(1,10,16))+
+  theme_classic()+
+  theme(axis.text.x = element_text(size = 19, hjust =.75),
+  axis.text.y = element_text(size = 19),
+  axis.title.x = element_text(size = 20),
+  axis.title.y = element_text(size = 20))+
+    scale_colour_viridis_d("Month") 
+S2b
+```
+
+Functional group abundances with month included (impervious surface)
+```{r}
+#Arthropod abundance by functional groups over 200 m
+S3a.pol <-ggplot(data = GGsite, aes(x= imp200m, y=n.obs.pol,color = month, shape = month))+
+  geom_point(size = 3, show.legend = FALSE)+
+  geom_smooth(method = lm, se= FALSE, show.legend = FALSE)+
+  labs( x = "",
+        y = "Pollinator abundance")+
+  scale_shape_manual(values = c(1,10,16))+
+  theme_classic()+
+  theme(axis.text.x = element_text(size = 19, hjust =.75),
+  axis.text.y = element_text(size = 19),
+  axis.title.x = element_text(size = 20),
+  axis.title.y = element_text(size = 25))+
+  scale_colour_viridis_d("Month") 
+S3a.pol
+
+S3a.herb <-ggplot(data = GGsite, aes(x= imp200m, y=n.obs.herb, color = month,shape = month))+
+  geom_point(size = 3, show.legend = FALSE)+
+  geom_smooth(method = lm, se= FALSE, show.legend = FALSE)+
+  labs( x = "",
+        y = "Herbivore abundance")+
+  scale_shape_manual(values = c(1,10,16))+
+  theme_classic()+
+  theme(axis.text.x = element_text(size = 19, hjust =.75),
+  axis.text.y = element_text(size = 19),
+  axis.title.x = element_text(size = 20),
+  axis.title.y = element_text(size = 25))+
+    scale_colour_viridis_d("Month")
+S3a.herb 
+
+S3a.pred <-ggplot(data = GGsite, aes(x= imp200m, y=n.obs.pred, color = month,shape = month))+
+  geom_point(size = 3, show.legend = FALSE)+
+  geom_smooth(method = lm, se= FALSE, show.legend = FALSE)+
+  labs( x = "% impervious surface",
+        y = "Predator abundance")+
+  scale_shape_manual(values = c(1,10,16))+
+  theme_classic()+
+  theme(axis.text.x = element_text(size = 19, hjust =.75),
+  axis.text.y = element_text(size = 19),
+  axis.title.x = element_text(size = 25),
+  axis.title.y = element_text(size = 25))+
+    scale_colour_viridis_d("Month")
+S3a.pred
+```
+Functional group abundances with month included (wealth index)
+```{r}
+#Arthropod abundance by functional groups and wealth index
+S3b.pol <-ggplot(data = GGsite, aes(x= wealth_index_2022, y=n.obs.pol, color = month, shape = month))+
+  geom_point(size = 3, show.legend = FALSE)+
+  geom_smooth(method = lm, se= FALSE, show.legend = FALSE)+
+  labs( x = "",
+        y = "")+
+  scale_shape_manual(values = c(1,10,16))+
+  theme_classic()+
+  theme(axis.text.x = element_text(size = 19, hjust =.75),
+  axis.text.y = element_text(size = 19),
+  axis.title.x = element_text(size = 20),
+  axis.title.y = element_text(size = 20))+
+    scale_colour_viridis_d("Month")
+S3b.pol
+
+S3b.herb <-ggplot(data = GGsite, aes(x= wealth_index_2022, y=n.obs.herb, color = month,shape = month))+
+  geom_point(size = 3, show.legend = FALSE)+
+  geom_smooth(method = lm, se= FALSE, show.legend = FALSE)+
+  labs( x = "",
+        y = "")+
+  scale_shape_manual(values = c(1,10,16))+
+  theme_classic()+
+  theme(axis.text.x = element_text(size = 19, hjust =.75),
+  axis.text.y = element_text(size = 19),
+  axis.title.x = element_text(size = 20),
+  axis.title.y = element_text(size = 20))+
+    scale_colour_viridis_d("Month")
+S3b.herb 
+
+S3b.pred  <-ggplot(data = GGsite, aes(x= wealth_index_2022, y=n.obs.pred, color = month, shape = month))+
+  geom_point(size = 3, show.legend = FALSE)+
+  geom_smooth(method = lm, se= FALSE, show.legend = FALSE)+
+  labs( x = "2022 wealth index",
+        y = "")+
+  scale_shape_manual(values = c(1,10,16))+
+  theme_classic()+
+  theme(axis.text.x = element_text(size = 19, hjust =.75),
+  axis.text.y = element_text(size = 19),
+  axis.title.x = element_text(size = 25),
+  axis.title.y = element_text(size = 20))+
+    scale_colour_viridis_d("Month")
+S3b.pred
+```
+
+Compiled into one figure
+
+```{r}
+Supp3panelfig <-ggarrange(ggarrange(S3a.pol,S3b.pol, ncol = 2, labels = c("","")),
+                       ggarrange(S3a.herb,S3b.herb, ncol = 2, labels = c("","")),
+                       ggarrange(S3a.pred,S3b.pred, ncol = 2, labels = c("","")), nrow = 3)
+
+ggsave("Supp3.png", Supp3panelfig, width = 10, height = 12, units = "in")
+```
+Plot just to extract legend
+```{r}
+
+S3b.pred.legend  <-ggplot(data = GGsite, aes(x= wealth_index_2022, y=n.obs.pred, color = month, linetype = month, shape = month))+
+  geom_point(size = 3)+
+  geom_smooth(method = lm, se= FALSE)+
+  labs( x = "2022 wealth index",
+        y = "",
+        color  = "Month", 
+        linetype = "Month", 
+        shape = "Month")+
+        scale_linetype_manual(values = c(3,2,1))+
+  scale_shape_manual(values = c(1,10,16))+
+  theme_classic()+
+  theme(axis.text.x = element_text(size = 19, hjust =.75),
+  axis.text.y = element_text(size = 19),
+  axis.title.x = element_text(size = 25),
+  axis.title.y = element_text(size = 20),
+  legend.key.size = unit(1, 'cm'),
+  legend.title = element_text(size=14),
+   legend.text = element_text(size=12))+
+    scale_colour_viridis_d("Month")
+S3b.pred.legend
+```
+
+Wealth correlation plot
+```{r}
+income <- ggplot(GGsite, aes(x =med_houseincome_2022, y = wealth_index_2022))+
+  geom_point()+
+  geom_smooth(method = lm, color = "#050524")+
+  theme_classic()+
+  labs(x= "Median household income", y = "Wealth Index" )+
+  theme(axis.text.x = element_text(size = 19, hjust =.75),
+  axis.text.y = element_text(size = 19),
+  axis.title.x = element_text(size = 20),
+  axis.title.y = element_text(size = 20))
+
+networth <- ggplot(GGsite, aes(x =med_networth_2022, y = wealth_index_2022))+
+  geom_point()+
+  geom_smooth(method = lm, color = "#050524")+
+  theme_classic()+
+  labs(x= "Median networth", y = "Wealth Index" )+
+  theme(axis.text.x = element_text(size = 19, hjust =.75),
+  axis.text.y = element_text(size = 19),
+  axis.title.x = element_text(size = 20),
+  axis.title.y = element_text(size = 20))
+
+homevalue <- ggplot(GGsite, aes(x =med_homevalue_2022, y = wealth_index_2022))+
+  geom_point()+
+  geom_smooth(method = lm, color = "#050524")+
+  theme_classic()+
+  labs(x= "Median home value", y = "Wealth Index" )+
+  theme(axis.text.x = element_text(size = 19, hjust =.75),
+  axis.text.y = element_text(size = 19),
+  axis.title.x = element_text(size = 20),
+  axis.title.y = element_text(size = 20))
+
+renters <- ggplot(GGsite, aes(x =renter_occ_Hus_2022, y = wealth_index_2022))+
+  geom_point()+
+  geom_smooth(method = lm, color = "#050524")+
+  theme_classic()+
+  labs(x= "Renter occupied housing", y = "Wealth Index" )+
+  theme(axis.text.x = element_text(size = 19, hjust =.75),
+  axis.text.y = element_text(size = 19),
+  axis.title.x = element_text(size = 20),
+  axis.title.y = element_text(size = 20))
+
+Supp4panelfig <-ggarrange(ggarrange(income),
+                        ggarrange(renters),  
+                       ggarrange(networth),
+                       ggarrange(homevalue), ncol = 2, nrow = 2)
+
+ggsave("Supp4.png", Supp4panelfig, width = 12, height = 8, units = "in")
+```
+
+
+Log likelihoods for impervious surface scale
+```{r}
+#Creating Vectors for log likelihoods
+x1 <-glmer.nb(n.obs ~ imp200m +scaled_wealth_index_2022 + (1|month), data = GGsite)
+x2 <-glmer.nb(n.obs ~ imp500m+scaled_wealth_index_2022 + (1|month), data = GGsite)
+x3 <-glmer.nb(n.obs ~ imp1km+scaled_wealth_index_2022 + (1|month), data = GGsite)
+x4 <-glmer.nb(n.obs ~ imp1.5km+scaled_wealth_index_2022  + (1|month), data = GGsite)
+x5 <-glmer.nb(n.obs ~ imp2km+scaled_wealth_index_2022  + (1|month), data = GGsite)
+likelihood.test <-c(x2,x3,x4,x5)
+
+#Running Log Likelihoods
+ll1 <-logLik(x1, REML =FALSE)
+ll2 <-logLik(x2, REML =FALSE)
+ll3 <-logLik(x3, REML =FALSE)
+ll4 <-logLik(x4, REML =FALSE)
+ll5 <-logLik(x5, REML =FALSE)
+
+likelihood.test <-data.frame("likelihood" = c(ll1,ll2,ll3,ll4,ll5), 
+                                "scale" = c(200,500,1000,1500,2000))
+#Creating a Theme
+My_Theme = theme(
+  axis.title.x = element_text(size = 14),
+  axis.text.x = element_text(size = 11),
+  axis.text.y = element_text(size = 11),
+  axis.title.y = element_text(size = 14),
+  plot.title = element_text(size = 16))
+
+#Plotting Log Likelihoods
+ggplot(likelihood.test, aes(x = scale, y = likelihood))+
+  geom_smooth(color = "#050524")+
+  theme_classic()+
+  labs(x= "% impervious surface scale (m)", y = "Log likelihood" )+
+  theme(axis.text.x = element_text(size = 19, hjust =.75),
+  axis.text.y = element_text(size = 19),
+  axis.title.x = element_text(size = 20),
+  axis.title.y = element_text(size = 20))
+## Shows that 500 m is the best scale
+```
+
+
+### Software and Package Versions for Report
+```{r}
+report_packages()
+citation()
+```
