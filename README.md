@@ -5,4 +5,4 @@ This repository contains the data and code used for the manuscript *The impact o
 [Full journal article](https://link.springer.com/article/10.1007/s11252-024-01560-y)
 
 **Citation:**
-Kaiser, A., & Resasco, J. (2024). The impact of impervious surface and neighborhood wealth on arthropod biodiversity and ecosystem services in community gardens. Urban Ecosystems, 1-13.
+Kaiser, A., & Resasco, J. (2024). The impact of impervious surface and neighborhood wealth on arthropod biodiversity and ecosystem services in community gardens. _Urban Ecosystems_, 27(5), 1863-1875.
